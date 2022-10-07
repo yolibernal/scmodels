@@ -424,8 +424,8 @@ class SCM:
                 items[0] = [
                     parent
                     for parent, _ in sorted_parents[
-                        1:
-                    ]  # element 0 is the noise name (must be removed)
+                        1 if items[2] is not None else 0 :
+                    ]  # element 0 might be noise name (must be removed if noise is not None)
                 ]
             elif isinstance(items[1], str):
                 # We reach this space only if a new assignment was provided, since existing assignments are already
