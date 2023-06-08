@@ -42,7 +42,6 @@ AssignmentMap = Dict[str, Union[Tuple[str, RV], Tuple[List[str], Callable, RV]]]
 
 
 class Assignment:
-
     noise_argname = "__{noise}__"
 
     def __init__(
@@ -292,6 +291,9 @@ class SCM:
                     )
                 data = node_attr[self.assignment_key](**named_args, **sample_named_args)
                 samples[node] = data
+                samples[f"{node}__{self.noise_key}__"] = sample_named_args.get(
+                    Assignment.noise_argname, 0
+                )
             samples_list.append(samples)
 
         return pd.DataFrame.from_dict(self.merge_dicts(samples_list))
@@ -578,8 +580,7 @@ class SCM:
                 f"a {str(AssignmentMap).replace('typing.', '')}."
             )
 
-        for (node_name, assignment_pack) in assignments.items():
-
+        for node_name, assignment_pack in assignments.items():
             # a sequence of size 2 is expected to be (assignment string, noise model)
             if len(assignment_pack) == 2:
                 assignment_str, noise_model = assignment_pack
