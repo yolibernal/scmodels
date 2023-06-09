@@ -1,9 +1,11 @@
 import random
+from test.build_scm import *
+
 import numpy as np
 import pandas as pd
 from numpy.polynomial.polynomial import Polynomial
-from test.build_scm import *
-from scmodels.parser import parse_assignments, extract_parents
+
+from scmodels.parser import extract_parents, parse_assignments
 
 
 def manual_sample_linandpoly(n, dtype, names, seed):
@@ -184,9 +186,7 @@ def test_scm_intervention():
     cn = build_scm_linandpoly(seed=seed)
 
     # do the intervention
-    cn.intervention(
-        {"X_3": (None, "N + 2.3 * X_0 + 2.3 * Y", Normal("N", 5, 2))}
-    )
+    cn.intervention({"X_3": (None, "N + 2.3 * X_0 + 2.3 * Y", Normal("N", 5, 2))})
     n = 10000
 
     scm_sample_interv = cn.sample(n)
@@ -195,7 +195,7 @@ def test_scm_intervention():
         n, dtype=np.float, names=cn.get_variables(), seed=cn.rng_state
     )
     sample["X_3"] = rng.normal(loc=5, scale=2, size=n) + 2.3 * (
-            sample["X_0"] + sample["Y"]
+        sample["X_0"] + sample["Y"]
     )
     sample = sample[cn.get_variables()]
 
@@ -243,7 +243,7 @@ def test_scm_softintervention():
     n = 100
     standard_sample = cn.sample(n, seed=seed)
     # do the intervention
-    cn.soft_intervention([("X_2", FiniteRV(str(cn["X_2"].noise), density={0: 1.}))])
+    cn.soft_intervention([("X_2", FiniteRV(str(cn["X_2"].noise), density={0: 1.0}))])
     sample = cn.sample(n)
     assignment = cn["X_2"].assignment
     manual_x2 = assignment(0, sample["X_0"], sample["X_1"])
@@ -257,41 +257,9 @@ def test_scm_softintervention():
     assert np.all(diff == 0.0)
 
 
-def test_sample_iter():
-    cn = build_scm_from_assignmentmap()
-    samples = {var: [] for var in cn.get_variables()}
-    rng1 = np.random.default_rng(seed=0)
-    rng2 = np.random.default_rng(seed=0)
-    iterator = cn.sample_iter(samples, seed=rng1)
-    n = 1000
-    for _ in range(n):
-        next(iterator)
-    standard_sample = cn.sample(n, seed=rng2)
-    samples = pd.DataFrame.from_dict(samples)
-    diff = (standard_sample.mean(0) - samples.mean(0)).abs().values
-    assert (diff < 1e-1).all()
-
-
 def test_reproducibility():
     cn = build_scm_linandpoly()
     n = 20
     sample = cn.sample(n, seed=1)
     sample2 = cn.sample(n, seed=1)
     assert (sample.to_numpy() == sample2.to_numpy()).all()
-
-
-def test_none_noise():
-    cn = SCM(["X = 1", "Y = N + X, N ~ Normal(0,1)"], seed=0)
-    n = 10
-    sample = cn.sample(n)
-    manual_y = np.random.default_rng(0).normal(size=n) + 1
-    assert (sample["X"] == 1).all()
-    assert (sample["Y"] == manual_y).all()
-
-    sample = {var: [] for var in cn.get_variables()}
-    sampler = cn.sample_iter(sample, seed=0)
-    list(next(sampler) for _ in range(n))
-    sample = pd.DataFrame.from_dict(sample)
-    manual_y = np.random.default_rng(0).normal(size=n) + 1
-    assert (sample["X"] == 1).all()
-    assert (sample["Y"] == manual_y).all()

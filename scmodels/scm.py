@@ -298,66 +298,6 @@ class SCM:
 
         return pd.DataFrame.from_dict(self.merge_dicts(samples_list))
 
-    def sample_iter(
-        self,
-        container: Optional[Dict[str, List]] = None,
-        variables: Optional[Sequence[Hashable]] = None,
-        seed: Optional[Union[int, np.random.Generator]] = None,
-    ) -> Iterator[Dict[str, List]]:
-        """
-        Sample method to generate data for the given variables. If no list of variables is supplied, the method will
-        simply generate data for all variables.
-        Setting the seed guarantees reproducibility.
-
-        Parameters
-        ----------
-        container: Dict[str, List] (optional),
-            the container in which to store the output. If none is provided, the sample is returned in a new container,
-            otherwise the provided container is filled with the samples and returned.
-        variables: list,
-            the variable names to consider for sampling. If None, all variables will be sampled.
-        seed: int or np.random.Generator,
-            the seeding for the noise generators
-
-        Returns
-        -------
-        pd.DataFrame,
-            the dataframe containing the samples of all the variables needed for the selection.
-        """
-        if seed is None:
-            seed = self.rng_state
-        vars_ordered = list(self._causal_iterator(variables))
-        noise_iters = []
-        for node in vars_ordered:
-            noise_gen = self.dag.nodes[node][self.noise_key]
-            if noise_gen is not None:
-                noise_iters.append(
-                    sample(noise_gen, numsamples=SingletonRegistry.Infinity, seed=seed)
-                )
-            else:
-                noise_iters.append(repeat(None))
-
-        if container is None:
-            samples = {var: [] for var in vars_ordered}
-        else:
-            samples = container
-        while True:
-            for i, node in enumerate(vars_ordered):
-                node_attr = self.dag.nodes[node]
-                predecessors = list(self.dag.predecessors(node))
-
-                named_args = dict()
-                for pred in predecessors:
-                    named_args[pred] = samples[pred][-1]
-
-                noise = next(noise_iters[i])
-                if noise is not None:
-                    named_args[Assignment.noise_argname] = noise
-
-                data = node_attr[self.assignment_key](**named_args)
-                samples[node].append(data)
-            yield samples
-
     def intervention(
         self,
         interventions: Dict[
