@@ -245,6 +245,7 @@ class SCM:
     def sample(
         self,
         n: int,
+        fixed_noise_values: Dict[str, Sequence[float]] = None,
         variables: Optional[Sequence[Hashable]] = None,
         seed: Optional[Union[int, np.random.Generator]] = None,
     ):
@@ -272,8 +273,10 @@ class SCM:
             seed = self.rng_state
 
         samples_list = []
+        noise_values_list = []
         for _ in range(n):
             samples = dict()
+            noise_values = dict()
             for node in self._causal_iterator(variables):
                 node_attr = self.dag.nodes[node]
                 predecessors = list(self.dag.predecessors(node))
@@ -285,18 +288,26 @@ class SCM:
                 noise_gen = node_attr[self.noise_key]
 
                 sample_named_args = {}
-                if noise_gen is not None:
+
+                if fixed_noise_values is not None and node in fixed_noise_values:
+                    sample_named_args[Assignment.noise_argname] = np.array(
+                        fixed_noise_values[node], dtype=float
+                    )
+                elif noise_gen is not None:
                     sample_named_args[Assignment.noise_argname] = np.array(
                         list(sample(noise_gen, size=(1,), seed=seed)), dtype=float
                     )
                 data = node_attr[self.assignment_key](**named_args, **sample_named_args)
                 samples[node] = data
-                samples[f"{node}__{self.noise_key}__"] = sample_named_args.get(
-                    Assignment.noise_argname, 0
+                noise_values[node] = sample_named_args.get(
+                    Assignment.noise_argname, np.zeros(1)
                 )
             samples_list.append(samples)
+            noise_values_list.append(noise_values)
 
-        return pd.DataFrame.from_dict(self.merge_dicts(samples_list))
+        return pd.DataFrame.from_dict(
+            self.merge_dicts(samples_list)
+        ), pd.DataFrame.from_dict(self.merge_dicts(noise_values_list))
 
     def intervention(
         self,
