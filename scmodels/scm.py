@@ -1,43 +1,40 @@
-from scmodels.parser import parse_assignments, extract_parents
-
+import logging
 import random
 import warnings
-
-import numpy as np
-import pandas as pd
-import networkx as nx
-from networkx.drawing.nx_agraph import graphviz_layout
-from collections import deque, defaultdict
-from itertools import repeat
+from collections import defaultdict, deque
+from copy import deepcopy
+from itertools import chain, repeat
+from operator import methodcaller
+from typing import (
+    Callable,
+    Collection,
+    Dict,
+    Generator,
+    Hashable,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Type,
+    Union,
+)
 
 import matplotlib.pyplot as plt
-import logging
-from copy import deepcopy
-
+import networkx as nx
+import numpy as np
+import pandas as pd
 import sympy
+from networkx.drawing.nx_agraph import graphviz_layout
 from sympy.core.singleton import SingletonRegistry
 from sympy.functions import *
 from sympy.stats import sample
 from sympy.stats.rv import RandomSymbol
 
-from typing import (
-    List,
-    Union,
-    Dict,
-    Tuple,
-    Iterable,
-    Set,
-    Mapping,
-    Sequence,
-    Collection,
-    Optional,
-    Hashable,
-    Sequence,
-    Type,
-    Generator,
-    Iterator,
-    Callable,
-)
+from scmodels.parser import extract_parents, parse_assignments
 
 RV = RandomSymbol
 AssignmentSeq = Sequence[str]
@@ -45,7 +42,6 @@ AssignmentMap = Dict[str, Union[Tuple[str, RV], Tuple[List[str], Callable, RV]]]
 
 
 class Assignment:
-
     noise_argname = "__{noise}__"
 
     def __init__(
@@ -112,13 +108,14 @@ class SCM:
         """
         A view of the variable's associated attributes
         """
+
         def __init__(
             self,
             var: str,
             parents: List[str],
             assignment: Assignment,
             noise: RV,
-            noise_repr: str
+            noise_repr: str,
         ):
             self.variable = var
             self.parents = parents
@@ -230,11 +227,7 @@ class SCM:
 
     def __getitem__(self, var):
         attr_dict = self.dag.nodes[var]
-        return SCM.NodeView(
-            var,
-            self.dag.pred[var],
-            **attr_dict
-        )
+        return SCM.NodeView(var, self.dag.pred[var], **attr_dict)
 
     def __str__(self):
         return self.str()
@@ -242,9 +235,17 @@ class SCM:
     def __iter__(self):
         return self._causal_iterator()
 
+    def merge_dicts(self, dicts: List):
+        dd = defaultdict(list)
+        dict_items = map(methodcaller("items"), (*dicts,))
+        for k, v in chain.from_iterable(dict_items):
+            dd[k].extend(v if isinstance(object, list) else [v])
+        return dd
+
     def sample(
         self,
         n: int,
+        fixed_noise_values: Dict[str, Sequence[float]] = None,
         variables: Optional[Sequence[Hashable]] = None,
         seed: Optional[Union[int, np.random.Generator]] = None,
     ):
@@ -268,87 +269,45 @@ class SCM:
             the dataframe containing the samples of all the variables needed for the selection.
         """
 
-        samples = dict()
         if seed is None:
             seed = self.rng_state
 
-        for node in self._causal_iterator(variables):
-            node_attr = self.dag.nodes[node]
-            predecessors = list(self.dag.predecessors(node))
-
-            named_args = dict()
-            for pred in predecessors:
-                named_args[pred] = samples[pred]
-
-            noise_gen = node_attr[self.noise_key]
-            if noise_gen is not None:
-                named_args[Assignment.noise_argname] = np.array(
-                    list(sample(noise_gen, numsamples=n, seed=seed)), dtype=float
-                )
-
-            data = node_attr[self.assignment_key](**named_args)
-            samples[node] = data
-        return pd.DataFrame.from_dict(samples)
-
-    def sample_iter(
-        self,
-        container: Optional[Dict[str, List]] = None,
-        variables: Optional[Sequence[Hashable]] = None,
-        seed: Optional[Union[int, np.random.Generator]] = None,
-    ) -> Iterator[Dict[str, List]]:
-        """
-        Sample method to generate data for the given variables. If no list of variables is supplied, the method will
-        simply generate data for all variables.
-        Setting the seed guarantees reproducibility.
-
-        Parameters
-        ----------
-        container: Dict[str, List] (optional),
-            the container in which to store the output. If none is provided, the sample is returned in a new container,
-            otherwise the provided container is filled with the samples and returned.
-        variables: list,
-            the variable names to consider for sampling. If None, all variables will be sampled.
-        seed: int or np.random.Generator,
-            the seeding for the noise generators
-
-        Returns
-        -------
-        pd.DataFrame,
-            the dataframe containing the samples of all the variables needed for the selection.
-        """
-        if seed is None:
-            seed = self.rng_state
-        vars_ordered = list(self._causal_iterator(variables))
-        noise_iters = []
-        for node in vars_ordered:
-            noise_gen = self.dag.nodes[node][self.noise_key]
-            if noise_gen is not None:
-                noise_iters.append(
-                    sample(noise_gen, numsamples=SingletonRegistry.Infinity, seed=seed)
-                )
-            else:
-                noise_iters.append(repeat(None))
-
-        if container is None:
-            samples = {var: [] for var in vars_ordered}
-        else:
-            samples = container
-        while True:
-            for i, node in enumerate(vars_ordered):
+        samples_list = []
+        noise_values_list = []
+        for _ in range(n):
+            samples = dict()
+            noise_values = dict()
+            for node in self._causal_iterator(variables):
                 node_attr = self.dag.nodes[node]
                 predecessors = list(self.dag.predecessors(node))
 
                 named_args = dict()
                 for pred in predecessors:
-                    named_args[pred] = samples[pred][-1]
+                    named_args[pred] = samples[pred]
 
-                noise = next(noise_iters[i])
-                if noise is not None:
-                    named_args[Assignment.noise_argname] = noise
+                noise_gen = node_attr[self.noise_key]
 
-                data = node_attr[self.assignment_key](**named_args)
-                samples[node].append(data)
-            yield samples
+                sample_named_args = {}
+
+                if fixed_noise_values is not None and node in fixed_noise_values:
+                    sample_named_args[Assignment.noise_argname] = np.array(
+                        fixed_noise_values[node], dtype=float
+                    )
+                elif noise_gen is not None:
+                    sample_named_args[Assignment.noise_argname] = np.array(
+                        list(sample(noise_gen, size=(1,), seed=seed)), dtype=float
+                    )
+                data = node_attr[self.assignment_key](**named_args, **sample_named_args)
+                samples[node] = data
+                noise_values[node] = sample_named_args.get(
+                    Assignment.noise_argname, np.zeros(1)
+                )
+            samples_list.append(samples)
+            noise_values_list.append(noise_values)
+
+        return pd.DataFrame.from_dict(
+            self.merge_dicts(samples_list)
+        ), pd.DataFrame.from_dict(self.merge_dicts(noise_values_list))
 
     def intervention(
         self,
@@ -418,8 +377,8 @@ class SCM:
                 items[0] = [
                     parent
                     for parent, _ in sorted_parents[
-                        1:
-                    ]  # element 0 is the noise name (must be removed)
+                        1 if items[2] is not None else 0 :
+                    ]  # element 0 might be noise name (must be removed if noise is not None)
                 ]
             elif isinstance(items[1], str):
                 # We reach this space only if a new assignment was provided, since existing assignments are already
@@ -572,8 +531,7 @@ class SCM:
                 f"a {str(AssignmentMap).replace('typing.', '')}."
             )
 
-        for (node_name, assignment_pack) in assignments.items():
-
+        for node_name, assignment_pack in assignments.items():
             # a sequence of size 2 is expected to be (assignment string, noise model)
             if len(assignment_pack) == 2:
                 assignment_str, noise_model = assignment_pack
